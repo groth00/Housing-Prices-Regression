@@ -16,6 +16,10 @@ sc = StandardScaler()
 df = pd.read_csv('~/Desktop/kaggle/train.csv')
 # 81 columns, first one is the sample number
 
+# need to isolate the SalePrices (what we are trying to predict)
+y = (df.iloc[:, -1])
+
+
 
 #find which columns have a significant amount of missing values
 total = df.isnull().sum().sort_values(ascending=False)
@@ -25,50 +29,53 @@ missing_data = pd.concat([total, percent], axis=1, keys=['Total', 'Percent'])
 
 
 #drop columns with missing values
-#for the column 'Electrical' only drop the 1 missing observation
+#from the column 'Electrical' drop the 1 observation w/missing value
+#also drop the observation from y (SalePrices) to match dimensions
 drop_labels = missing_data[missing_data['Total']>1].index
 df_train = df.drop(drop_labels, axis=1)
 
 missing_value = df_train.loc[df_train['Electrical'].isnull()].index
-df2 = df_train.drop(missing_value)
+df_train = df_train.drop(missing_value)
+y = y.drop(missing_value)
 
+df_train = df_train.drop(df_train.columns[-1], axis=1)
 #check to make sure the columns were dropped
 # print(df_train.head(n=3))
-# print(df2.head(n=3))
 
+#dimensions: 1459 x 62
+# print(df_train.shape)
 
 #encode the categorical variables and join with numerical variables
-categorical_variables = df2.select_dtypes(exclude=np.number)
-numerical_variables = df2.select_dtypes(include=np.number)
+categorical_variables = df_train.select_dtypes(exclude=np.number)
+numerical_variables = df_train.select_dtypes(include=np.number)
 encoded_variables = pd.get_dummies(categorical_variables)
 
+
 #check to make sure the dimensions will match
-print(numerical_variables.shape)
-print(encoded_variables.shape)
+# print(numerical_variables.shape)
+# print(encoded_variables.shape)
 
+#processed data frame is now 1459 x 221
 processed_df = pd.concat([numerical_variables, encoded_variables], axis=1)
-print(processed_df.head(n=5))
+
+#view data frame entirely
+# pd.set_option('display.max_columns', 999)
+# print(processed_df.head(n=5))
 
 
-#split the training data and fit through pipeline
-# train_test_split(processed_df)
+
+#split the training data and fit through pipeline (split data later?)
+X = processed_df.values
+
+#currently works, but there is a warning for StandardScaler converting int64 to float64
 pipe_dt = make_pipeline(StandardScaler(), PCA(n_components=2), DecisionTreeRegressor(random_state=1))
-pipe_dt.fit(processed_df)
-
-
-#encoding one categorical variable
-# print(categorical_variables.iloc[:, 0].head(n=5))
-# int_labels = label.fit_transform(categorical_variables.iloc[:, 0]).reshape(-1, 1)
-# ohe_labels = ohe.fit_transform(int_labels)
-# np.set_printoptions(threshold=None)
-# print(ohe_labels.toarray())
-
+pipe_dt.fit(X, y)
 
 
 
 #TODO:
-#standardize values
-#feature selection/PCA
+#input test data and preprocess that also
+#use to pipline to standardize values -> feature selection/PCA -> train model
 #k-fold cross validation?
 #grid search to tune hyperparameters
-#pipeline to test models
+#test how accurate the model is on the test data
