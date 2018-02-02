@@ -38,11 +38,11 @@ df_train.drop(df_train[(df_train['GrLivArea']>4000) & (df_train['SalePrice']<300
 #merge into one dataset, drop column with sample number
 df = pd.concat([df_train, df_test], ignore_index=True)
 df.drop(['Id'], axis=1, inplace=True)
-print(df.shape)
+# print(df.shape)
 
 
 missing_values = df.isnull().sum()
-print(missing_values[missing_values>0].sort_values(ascending=False))
+# print(missing_values[missing_values>0].sort_values(ascending=False))
 # print(df.groupby(['Neighborhood'])[['LotFrontage']].agg(['mean','median','count']))
 df['LotAreaCut'] = pd.qcut(df.LotArea, 10)
 # print(df.groupby(['LotAreaCut'])[['LotFrontage']].agg(['mean', 'median', 'count']))
@@ -54,23 +54,26 @@ df['LotFrontage']=df.groupby(['LotAreaCut','Neighborhood'])['LotFrontage'].trans
 #fill in missing values without neighborhood
 df['LotFrontage']=df.groupby(['LotAreaCut'])['LotFrontage'].transform(lambda x: x.fillna(x.median()))
 
-#fill in missing values based on feature
-cols=["MasVnrArea", "BsmtUnfSF", "TotalBsmtSF", "GarageCars", "BsmtFinSF2", "BsmtFinSF1", "GarageArea"]
-for col in cols:
+#our own missing values
+categorical = ['PoolQC', 'MiscFeature', 'Alley', 'Fence', 'FireplaceQu', 'GarageQual', 'GarageCond', 'GarageFinish',
+              'GarageYrBlt', 'GarageType', 'BsmtExposure', 'BsmtCond', 'BsmtQual', 'BsmtFinType2', 'BsmtFinType1',
+              'MasVnrType']
+for col in categorical:
+    df[col].fillna('None', inplace=True)
+
+numerical_0 = ['MasVnrArea', 'BsmtUnfSF', 'TotalBsmtSF', 'GarageCars', 'BsmtFinSF2', 'BsmtFinSF1', 'GarageArea']
+for col in numerical_0:
     df[col].fillna(0, inplace=True)
 
-cols1 = ["PoolQC" , "MiscFeature", "Alley", "Fence", "FireplaceQu", "GarageQual", "GarageCond", "GarageFinish",
-         "GarageYrBlt", "GarageType", "BsmtExposure", "BsmtCond", "BsmtQual", "BsmtFinType2", "BsmtFinType1",
-         "MasVnrType"]
-for col in cols1:
-    df[col].fillna("None", inplace=True)
-
-
-cols2 = ["MSZoning", "BsmtFullBath", "BsmtHalfBath", "Utilities", "Functional", "Electrical", "KitchenQual",
-         "SaleType","Exterior1st", "Exterior2nd"]
-for col in cols2:
+numerical_mode = ['MSZoning', 'BsmtFullBath', 'BsmtHalfBath', 'Utilities', 'Functional', 'Electrical', 'KitchenQual',
+         'SaleType','Exterior1st', 'Exterior2nd']
+for col in numerical_mode:
     df[col].fillna(df[col].mode()[0], inplace=True)
 
+
+# print(df['MSZoning'].mode()[0])
+
+###Feature engineering
 
 #convert some numerical features into categorical
 NumStr = ["MSSubClass","BsmtFullBath","BsmtHalfBath","HalfBath","BedroomAbvGr","KitchenAbvGr","MoSold","YrSold",
@@ -170,6 +173,7 @@ map_values()
 df.drop("LotAreaCut",axis=1,inplace=True)
 df.drop(['SalePrice'],axis=1,inplace=True)
 
+print(df.shape)
 
 ###PIPELINE
 
@@ -206,22 +210,80 @@ class skew_dummies(BaseEstimator, TransformerMixin):
 
 
 #copy dataset, then fit the copy through the pipeline
+#so when the data is sent through the skew_dummies part of the pipeline, it will only operate on columns of
+#the dataset that are not type object, meaning it excludes columns with strings
+#therefore, leaving 'None' in the columns before sending it through the pipeline is equivalent to throwing it away
+
 pipe = Pipeline([('labenc', labelenc()), ('skew_dummies', skew_dummies(skew=1)),])
 df_copy = df.copy()
+# print(df_copy.head(n=5).describe)
 data_pipe = pipe.fit_transform(df_copy)
-print(data_pipe.shape)
+# print(data_pipe.shape)
 
 
-#deal with outliers?
+
+#deal with outliers
 scaler = RobustScaler()
-n_train=df_train.shape[0]
 
+#split X into training and test samples, as well as setting y to house prices of training set
+n_train=df_train.shape[0]
 X = data_pipe[:n_train]
 test_X = data_pipe[n_train:]
 y= df_train.SalePrice
 
+#standardize values with RobustScaler
 X_scaled = scaler.fit(X).transform(X)
 y_log = np.log(df_train.SalePrice)
 test_X_scaled = scaler.transform(test_X)
 
+#visualize the importance of features
+lasso = Lasso(alpha=0.001)
+lasso.fit(X_scaled, y_log)
+Fl_lasso = pd.DataFrame({'Feature Importance':lasso.coef_}, index=data_pipe.columns)
+Fl_lasso.sort_values("Feature Importance",ascending=False)
+Fl_lasso[Fl_lasso["Feature Importance"]!=0].sort_values("Feature Importance").plot(kind="barh",figsize=(15,25))
+plt.xticks(rotation=90)
+# plt.show()
 
+
+#cross validation strategy
+def rmse_cv(model, X, y):
+    rmse = np.sqrt(-cross_val_score(model, X, y, scoring='neg_mean_squared_error', cv=5))
+    return rmse
+
+
+#pick models, set names, print scores of each model
+models = [LinearRegression(), Ridge(), Lasso(alpha=0.01, max_iter=10000), RandomForestRegressor(),
+          GradientBoostingRegressor(), SVR(), LinearSVR(), ElasticNet(alpha=0.001, max_iter=10000),
+          SGDRegressor(max_iter=1000, tol=1e-3), BayesianRidge(), KernelRidge(alpha=0.6, kernel='polynomial',
+          degree=2, coef0=2.5), ExtraTreesRegressor()]
+names = ['LR', 'Ridge', 'Lasso', 'RF', 'GBR', 'SVR', 'LinSVR', 'Ela', 'SGD', 'Bay', 'Ker', 'Extra']
+for name, model in zip(names, models):
+    score = rmse_cv(model, X_scaled, y_log)
+    print('{}: {:.6f}, {:.4f}'.format(name, score.mean(), score.std()))
+
+
+#define grid search method
+class grid():
+    def __init__(self, model):
+        self.model = model
+
+    def grid_get(self, X, y, param_grid):
+        grid_search = GridSearchCV(self.model, param_grid, cv=5, scoring='neg_mean_squared_error')
+        grid_search.fit(X, y)
+        print(grid_search.best_params_, np.sqrt(-grid_search.best_score_))
+        grid_search.cv_results_['mean_test_score'] = np.sqrt(-grid_search.cv_results_['mean_test_score'])
+        print(pd.DataFrame(grid_search.cv_results_)[['params', 'mean_test_score', 'std_test_score']])
+
+grid(Lasso()).grid_get(X_scaled,y_log,{'alpha': [0.0004,0.0005,0.0007,0.0006,0.0009,0.0008],'max_iter':[10000]})
+grid(Ridge()).grid_get(X_scaled,y_log,{'alpha':[35,40,45,50,55,60,65,70,80,90]})
+grid(SVR()).grid_get(X_scaled,y_log,{'C':[11,12,13,14,15],'kernel':["rbf"],"gamma":[0.0003,0.0004],
+                                     "epsilon":[0.008,0.009]})
+
+param_grid={'alpha':[0.2,0.3,0.4,0.5], 'kernel':["polynomial"], 'degree':[3],'coef0':[0.8,1,1.2]}
+grid(KernelRidge()).grid_get(X_scaled,y_log,param_grid)
+
+grid(ElasticNet()).grid_get(X_scaled,y_log,{'alpha':[0.0005,0.0008,0.004,0.005],'l1_ratio':[0.08,0.1,0.3,0.5,0.7],
+                                            'max_iter':[10000]})
+
+#grid search for ensemble models
